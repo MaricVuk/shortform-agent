@@ -4,8 +4,9 @@ Agentic pipeline koji od **jedne teme** automatski pravi gotov **short-form
 video** (YouTube Shorts / TikTok / Reels, 9:16): web research → naslov + skripta
 sa self-eval agent petljom → TTS naracija (sa sinhronizovanim titlovima po
 recima) → stock vizuali sa self-eval petljom → montaža u MP4 (titlovi se pale
-tačno kad se izgovori odgovarajuća reč, CapCut/TikTok stil) → priprema (mock)
-scheduled objave.
+tačno kad se izgovori odgovarajuća reč, CapCut/TikTok stil; slajdovi imaju
+blagi Ken Burns zoom/pan i crossfade tranzicije umesto tvrdog reza) →
+priprema (mock) scheduled objave.
 
 Ovo **nije** linearni skript. Na dva mesta LLM **sam ocenjuje svoj output** i
 odlučuje da ga regeneriše pre nego što ga pusti dalje — to je razlika između

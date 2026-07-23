@@ -74,6 +74,47 @@ def test_active_chunk_none_in_gap():
     assert assemble._active_chunk(chunks, 1.5) is None
 
 
+# --- _pan_window (Ken Burns cista funkcija) ---
+
+class _FakeImg:
+    """Duck-typed PIL.Image stand-in: samo .size i .crop() su bitni ovde."""
+
+    def __init__(self, size):
+        self.size = size
+        self.last_crop = None
+
+    def crop(self, box):
+        self.last_crop = box
+        return box  # vracamo sam box radi lakse asercije
+
+
+def test_pan_window_start_of_diagonal_path():
+    img = _FakeImg((1242, 2208))  # 1.15x oversized od 1080x1920
+    box = assemble._pan_window(img, (1080, 1920), progress=0.0, path=(0.0, 0.0, 1.0, 1.0))
+    assert box == (0, 0, 1080, 1920)
+
+
+def test_pan_window_end_of_diagonal_path():
+    img = _FakeImg((1242, 2208))
+    box = assemble._pan_window(img, (1080, 1920), progress=1.0, path=(0.0, 0.0, 1.0, 1.0))
+    max_dx, max_dy = 1242 - 1080, 2208 - 1920
+    assert box == (max_dx, max_dy, max_dx + 1080, max_dy + 1920)
+
+
+def test_pan_window_midpoint_is_between_endpoints():
+    img = _FakeImg((1242, 2208))
+    box = assemble._pan_window(img, (1080, 1920), progress=0.5, path=(0.0, 0.0, 1.0, 1.0))
+    max_dx, max_dy = 1242 - 1080, 2208 - 1920
+    assert box[0] == round(0.5 * max_dx)
+    assert box[1] == round(0.5 * max_dy)
+
+
+def test_pan_window_no_oversize_stays_at_origin():
+    img = _FakeImg((1080, 1920))  # bez viska prostora za pan
+    box = assemble._pan_window(img, (1080, 1920), progress=1.0, path=(0.0, 0.0, 1.0, 1.0))
+    assert box == (0, 0, 1080, 1920)
+
+
 # --- assemble_video (injektovan renderer) ---
 
 def test_assemble_calls_renderer_with_planned_durations(tmp_path):
