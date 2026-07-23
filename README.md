@@ -14,17 +14,45 @@ obične automatizacije i pravog agenta.
 Orkestraciju vodi **LangGraph** graf sa dve eksplicitne odluke (conditional
 edges), ne skrivene `if`-ove:
 
+Dijagram ispod je generisan direktno iz koda (`graph.get_graph().draw_mermaid()`),
+ne crtan rucno — uvek odgovara stvarnom grafu u [`orchestration/graph.py`](orchestration/graph.py).
+
 ```mermaid
-flowchart LR
-    R[research] --> G[generate_script]
-    G --> ES{eval_script}
-    ES -- ocena < prag --> G
-    ES -- ok / max pokušaja --> T[tts]
-    T --> K[extract_keywords] --> F[fetch_media]
-    F --> EM{eval_media}
-    EM -- loši vizuali --> RK[refine_keywords] --> F
-    EM -- ok / max pokušaja --> A[assemble]
-    A --> S[schedule] --> E([END])
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	research(research)
+	generate_script(generate_script)
+	eval_script(eval_script)
+	tts(tts)
+	extract_keywords(extract_keywords)
+	fetch_media(fetch_media)
+	eval_media(eval_media)
+	refine_keywords(refine_keywords)
+	assemble(assemble)
+	schedule(schedule)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> research;
+	assemble --> schedule;
+	eval_media -. &nbsp;continue&nbsp; .-> assemble;
+	eval_media -. &nbsp;retry&nbsp; .-> refine_keywords;
+	eval_script -. &nbsp;retry&nbsp; .-> generate_script;
+	eval_script -. &nbsp;continue&nbsp; .-> tts;
+	extract_keywords --> fetch_media;
+	fetch_media --> eval_media;
+	generate_script --> eval_script;
+	refine_keywords --> fetch_media;
+	research --> generate_script;
+	tts --> extract_keywords;
+	schedule --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
+Da regenerišeš ovaj dijagram posle izmene grafa:
+
+```bash
+python -c "from orchestration.graph import build_graph; print(build_graph().get_graph().draw_mermaid())"
 ```
 
 1. **Checkpoint skripte** — LLM oceni hook u prve 3 sekunde (1–10). Ako je ispod
@@ -111,6 +139,14 @@ curl http://127.0.0.1:8000/status/abc123...
 
 Kad status pređe u `ready_to_publish`, gotov video i metapodaci su u
 `output/<run_id>/` (`audio.mp3`, `media_*.jpg`, `final.mp4`, `metadata.json`).
+
+**6. Vizuelni prikaz**
+
+- `http://127.0.0.1:8000/dashboard/<run_id>` — live prikaz napretka kroz svih
+  6 faza (uključujući attempt/score brojače za oba self-eval checkpointa),
+  automatski poll-uje `/status` i prikaže gotov video kad je spreman.
+- `http://127.0.0.1:8000/docs` — interaktivni Swagger UI (automatski od
+  FastAPI-ja), gde možeš direktno da testiraš endpoint-e iz browsera.
 
 ## Testiranje
 

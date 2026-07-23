@@ -230,24 +230,44 @@ def build_graph():
     return g.compile()
 
 
-def run_pipeline(topic: str, run_id: str, deps: Deps | None = None) -> dict:
-    """Pokreni ceo pipeline za `topic` i vrati finalno stanje.
+def run_pipeline_streaming(
+    topic: str,
+    run_id: str,
+    deps: Deps | None = None,
+    on_step: Optional[Callable[[str, dict], None]] = None,
+) -> dict:
+    """Pokreni pipeline i zovi `on_step(node_name, state)` posle SVAKOG cvora.
+
+    Isti graf i ista logika kao `run_pipeline`, samo se stanje emituje
+    inkrementalno preko `graph.stream(..., stream_mode="updates")` umesto da
+    se ceka kraj — koristi se za live progress (npr. /dashboard u api.py).
 
     Args:
         topic: tema videa.
         run_id: jedinstveni id (i ime output foldera).
         deps: injektabilne zavisnosti; None -> pravi klijenti.
+        on_step: opciona funkcija (node_name, trenutno_stanje) -> None.
     """
     deps = deps or Deps()
     out_dir = config.OUTPUT_DIR / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     graph = build_graph()
-    initial: PipelineState = {
+    state: dict = {
         "run_id": run_id,
         "topic": topic,
         "out_dir": str(out_dir),
         "deps": deps,
     }
     # recursion_limit da beskonacna petlja (bug) ne visi zauvek
-    return graph.invoke(initial, {"recursion_limit": 50})
+    for update in graph.stream(state, {"recursion_limit": 50}, stream_mode="updates"):
+        for node_name, partial in update.items():
+            state.update(partial)
+            if on_step:
+                on_step(node_name, dict(state))
+    return state
+
+
+def run_pipeline(topic: str, run_id: str, deps: Deps | None = None) -> dict:
+    """Pokreni ceo pipeline za `topic` i vrati finalno stanje (bez progress callback-a)."""
+    return run_pipeline_streaming(topic, run_id, deps=deps)
