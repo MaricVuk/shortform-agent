@@ -1,0 +1,28 @@
+# --- LLM (naslov, skripta, self-eval) ---
+groq>=0.11.0
+
+# --- Web research ---
+tavily-python>=0.5.0
+
+# --- TTS (bez API kljuca) ---
+edge-tts>=6.1.0
+
+# --- Stock slike/video (Pexels preko requests) ---
+requests>=2.31.0
+
+# --- Video montaza ---
+moviepy==1.0.3
+imageio-ffmpeg>=0.5.1   # bundluje staticki ffmpeg binary (nije potreban sistemski ffmpeg)
+
+# --- Agent orkestracija ---
+langgraph>=0.2.0
+
+# --- API / webhook sloj ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# --- Utility ---
+python-dotenv>=1.0.0
+
+# --- Dev / test ---
+pytest>=8.0.0

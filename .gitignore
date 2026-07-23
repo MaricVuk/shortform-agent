@@ -1,0 +1,26 @@
+# Tajne -- NIKAD u istoriju
+.env
+
+# Generisani izlaz
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+.CLAUDE.md
+
