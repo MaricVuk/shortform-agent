@@ -47,6 +47,9 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 VIDEO_FPS = 30
 
+# Koliko reci se grupise u jedan caption "chunk" (sinhronizovani titlovi u koraku 5).
+CAPTION_CHUNK_SIZE = int(os.getenv("CAPTION_CHUNK_SIZE", "3"))
+
 # --- Scheduling (mock) ---
 DEFAULT_PLATFORMS = ["youtube_shorts", "tiktok", "instagram_reels"]
 

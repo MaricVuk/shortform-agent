@@ -60,6 +60,7 @@ class PipelineState(TypedDict, total=False):
 
     audio_path: str
     audio_duration: float
+    captions: list  # list[tts.Caption], sinhronizovani titlovi po recima
 
     keywords: list
     assets: list  # list[media.MediaAsset]
@@ -113,7 +114,11 @@ def _tts_node(state: PipelineState) -> dict:
         tts_runner=deps.tts_runner,
         duration_probe=deps.duration_probe,
     )
-    return {"audio_path": result.audio_path, "audio_duration": result.duration}
+    return {
+        "audio_path": result.audio_path,
+        "audio_duration": result.duration,
+        "captions": result.captions,
+    }
 
 
 def _keywords_node(state: PipelineState) -> dict:
@@ -171,7 +176,7 @@ def _assemble_node(state: PipelineState) -> dict:
         state["audio_duration"],
         image_paths,
         out_path,
-        title=draft.title,
+        captions=state.get("captions", []),
         renderer=deps.renderer,
     )
     return {"video_path": video_path}

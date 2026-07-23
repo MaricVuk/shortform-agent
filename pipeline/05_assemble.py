@@ -1,17 +1,23 @@
 """Korak 5 — Montaza finalnog MP4 (MoviePy).
 
 Spaja preuzete slike u vertikalni (9:16) slideshow sinhronizovan sa duzinom
-naracije, dodaje audio i opcioni naslov-overlay, i renderuje MP4.
+naracije, dodaje audio i **sinhronizovane titlove po recima** (iz koraka 3),
+i renderuje MP4.
 
 Dizajn:
 - `plan_slides(n, audio_duration)` je CISTA funkcija (raspodela trajanja po
   slikama) — potpuno testabilna bez ffmpeg-a.
+- `group_captions(...)` i `_active_chunk(...)` su takodje ciste funkcije —
+  grupisu pojedinacne reci (iz edge-tts word-boundary timestamp-a) u citljive
+  "chunk"-ove i nalaze koji je aktivan u datom trenutku.
 - `assemble_video(...)` prima injektabilni `renderer`, pa se validacija i
   raspodela testiraju bez pravog renderovanja. Podrazumevani `_moviepy_render`
   radi pravu montazu (verifikuje se u end-to-end testu).
 
 FFmpeg dolazi preko `imageio-ffmpeg` (bundlovan), nije potreban sistemski.
-Title overlay se crta preko PIL-a (bez ImageMagick zavisnosti) i fail-safe je.
+Titlovi se crtaju preko PIL-a (bez ImageMagick zavisnosti) kao providan
+overlay preko cele montaze — vidljivi samo dok se odgovarajuce reci izgovaraju
+(za razliku od statickog naslova preko celog videa).
 """
 from __future__ import annotations
 
@@ -38,6 +44,35 @@ def plan_slides(num_assets: int, audio_duration: float) -> list[float]:
     return durations
 
 
+def group_captions(captions: list[Any], chunk_size: int | None = None) -> list[tuple[str, float, float]]:
+    """Grupisi reci (sa .text/.start/.end) u citljive chunk-ove za prikaz.
+
+    Prikazivanje reci jednu po jednu je previse "trzavo"; grupisanje po
+    `chunk_size` reci (podrazumevano config.CAPTION_CHUNK_SIZE) daje kratke
+    fraze sinhronizovane sa govorom, kao u TikTok/CapCut stilu titlova.
+
+    Vraca listu (text, start, end) — obicni tuple-ovi, ne zavisi od
+    konkretnog Caption tipa (duck typing, isti obrazac kao ostatak pipeline-a).
+    """
+    chunk_size = chunk_size or config.CAPTION_CHUNK_SIZE
+    groups: list[tuple[str, float, float]] = []
+    for i in range(0, len(captions), chunk_size):
+        chunk = captions[i : i + chunk_size]
+        if not chunk:
+            continue
+        text = " ".join(c.text for c in chunk)
+        groups.append((text, chunk[0].start, chunk[-1].end))
+    return groups
+
+
+def _active_chunk(chunks: list[tuple[str, float, float]], t: float) -> str | None:
+    """Nadji tekst chunk-a aktivnog u trenutku `t` (sekunde), ili None."""
+    for text, start, end in chunks:
+        if start <= t < end:
+            return text
+    return None
+
+
 def _cover_fit(img: "Any", size: tuple[int, int]) -> "Any":
     """Skaliraj sliku da PREKRIJE ciljni format, pa centralno iseci na `size`.
 
@@ -55,51 +90,75 @@ def _cover_fit(img: "Any", size: tuple[int, int]) -> "Any":
     return resized.crop((left, top, left + tw, top + th))
 
 
-def _draw_caption(img: "Any", text: str) -> None:
-    """Nacrtaj naslov (poluprovidna traka + tekst) na dnu slike, in-place."""
-    from PIL import ImageDraw, ImageFont
-
-    tw, th = img.size
-    pad, band_h = 48, 260
-    draw = ImageDraw.Draw(img, "RGBA")
-    try:
-        font = ImageFont.truetype("arialbd.ttf", 66)
-    except OSError:
-        font = ImageFont.load_default()
-
-    # wrap na sirinu (max 3 linije)
-    words, lines, line = text.split(), [], ""
-    for word in words:
-        trial = f"{line} {word}".strip()
-        if draw.textlength(trial, font=font) <= tw - 2 * pad:
-            line = trial
-        else:
-            lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    block = "\n".join(lines[:3])
-
-    y0 = th - band_h
-    draw.rectangle([0, y0, tw, th], fill=(0, 0, 0, 150))
-    draw.multiline_text(
-        (pad, y0 + pad), block, font=font, fill=(255, 255, 255, 255), spacing=12
-    )
-
-
-def _prepare_frame(src_path: str, size: tuple[int, int], title: str | None) -> "Any":
-    """Ucitaj sliku, cover-fit na ciljni format i (opciono) upeci naslov.
-
-    Vraca numpy RGB array spreman za MoviePy ImageClip.
-    """
+def _prepare_frame(src_path: str, size: tuple[int, int]) -> "Any":
+    """Ucitaj sliku i cover-fit na ciljni format. Vraca numpy RGB array."""
     import numpy as np
     from PIL import Image
 
     img = Image.open(src_path).convert("RGB")
     img = _cover_fit(img, size)
-    if title:
-        _draw_caption(img, title)
     return np.array(img)
+
+
+_CAPTION_BAND_HEIGHT = 220
+_CAPTION_FONT_SIZE = 68
+
+
+def _load_caption_font(size: int = _CAPTION_FONT_SIZE) -> "Any":
+    from PIL import ImageFont
+
+    try:
+        return ImageFont.truetype("arialbd.ttf", size)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def _render_caption_band(width: int, text: str, font: "Any") -> "Any":
+    """Nacrtaj jedan caption chunk na providnoj traci sirine `width`."""
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (width, _CAPTION_BAND_HEIGHT), (18, 18, 18))
+    draw = ImageDraw.Draw(img)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = max(0, (width - text_w) // 2)
+    y = max(0, (_CAPTION_BAND_HEIGHT - text_h) // 2)
+    draw.text((x, y), text, font=font, fill=(255, 224, 90))
+    return img
+
+
+def _caption_overlay_clip(
+    chunks: list[tuple[str, float, float]], size: tuple[int, int], duration: float
+) -> "Any":
+    """Napravi providan overlay-clip koji prikazuje aktivan caption chunk.
+
+    Providnost (mask) je TAKODJE vremenski promenljiva: 0 kad nijedan chunk
+    nije aktivan (izmedju reci/fraza), 1 kad jeste — titlovi se pale/gase
+    tacno u ritmu govora, ne stoje stalno na ekranu.
+    """
+    import numpy as np
+    from moviepy.editor import VideoClip
+
+    tw, _th = size
+    font = _load_caption_font()
+    blank = np.array(_render_caption_band(tw, "", font))
+    rendered_cache: dict[str, "np.ndarray"] = {}
+
+    def make_frame(t: float) -> "np.ndarray":
+        text = _active_chunk(chunks, t)
+        if text is None:
+            return blank
+        if text not in rendered_cache:
+            rendered_cache[text] = np.array(_render_caption_band(tw, text, font))
+        return rendered_cache[text]
+
+    def make_mask(t: float) -> "np.ndarray":
+        opacity = 0.72 if _active_chunk(chunks, t) is not None else 0.0
+        return np.full((_CAPTION_BAND_HEIGHT, tw), opacity)
+
+    clip = VideoClip(make_frame, duration=duration)
+    mask_clip = VideoClip(make_mask, duration=duration, ismask=True)
+    return clip.set_mask(mask_clip).set_position(("center", "bottom"))
 
 
 def _moviepy_render(
@@ -107,25 +166,31 @@ def _moviepy_render(
     image_paths: list[str],
     durations: list[float],
     out_path: Path,
-    title: str | None,
+    captions: list[Any],
     size: tuple[int, int],
     fps: int,
 ) -> None:
-    """Podrazumevani renderer: slideshow (cover-fit + naslov) + audio -> MP4.
+    """Podrazumevani renderer: slideshow (cover-fit) + audio + sync titlovi -> MP4.
 
-    Frame-ovi se pripremaju u PIL-u pa se prosledjuju kao numpy array; MoviePy
-    sluzi samo za concat, audio mux i ffmpeg zapis (izbegnut krhki resize fx).
+    Frame-ovi slika se pripremaju u PIL-u pa se prosledjuju kao numpy array;
+    MoviePy sluzi za concat, caption compositing, audio mux i ffmpeg zapis
+    (izbegnut krhki MoviePy resize fx, vidi `_cover_fit`).
     """
-    from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
+    from moviepy.editor import AudioFileClip, CompositeVideoClip, ImageClip, concatenate_videoclips
 
     clips = [
-        ImageClip(_prepare_frame(path, size, title)).set_duration(dur)
+        ImageClip(_prepare_frame(path, size)).set_duration(dur)
         for path, dur in zip(image_paths, durations)
     ]
 
     video = concatenate_videoclips(clips, method="chain")
     audio = AudioFileClip(audio_path)
     video = video.set_audio(audio).set_duration(audio.duration)
+
+    chunks = group_captions(captions) if captions else []
+    if chunks:
+        caption_clip = _caption_overlay_clip(chunks, size, video.duration)
+        video = CompositeVideoClip([video, caption_clip], size=size)
 
     video.write_videofile(
         str(out_path),
@@ -145,7 +210,7 @@ def assemble_video(
     audio_duration: float,
     image_paths: list[str],
     out_path: str | Path,
-    title: str | None = None,
+    captions: list[Any] | None = None,
     *,
     renderer: Callable[..., Any] | None = None,
 ) -> str:
@@ -156,7 +221,8 @@ def assemble_video(
         audio_duration: trajanje naracije u sekundama (za sync).
         image_paths: putanje do preuzetih slika (iz koraka 4).
         out_path: gde snimiti finalni mp4.
-        title: opcioni naslov za overlay.
+        captions: lista objekata sa .text/.start/.end (iz koraka 3) za
+            sinhronizovane titlove; None/prazna lista -> bez titlova.
         renderer: injektabilni renderer (za testove).
 
     Raises:
@@ -176,7 +242,7 @@ def assemble_video(
         list(image_paths),
         durations,
         out_path,
-        title,
+        captions or [],
         (config.VIDEO_WIDTH, config.VIDEO_HEIGHT),
         config.VIDEO_FPS,
     )
